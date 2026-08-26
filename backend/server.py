@@ -3,17 +3,32 @@ from datetime import date
 from threading import Lock
 from typing import Any
 
+# pyrefly: ignore [missing-import]
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from database import engine, Base, SessionLocal
 from models import Stock as StockModel
 
-# Create database tables if they don't already exist
+
+# --------------------------------------------------
+# Create database tables
+# --------------------------------------------------
+
 Base.metadata.create_all(bind=engine)
+
+
+# --------------------------------------------------
+# Flask App
+# --------------------------------------------------
 
 app = Flask(__name__)
 CORS(app)
+
+
+# --------------------------------------------------
+# Currency Rates
+# --------------------------------------------------
 
 RATES = {
     "USD": 1.0,
@@ -23,7 +38,7 @@ RATES = {
 
 
 # --------------------------------------------------
-# Existing Stock data used by your dashboard/simulator
+# Existing Stock data used by dashboard/simulator
 # --------------------------------------------------
 
 @dataclass(frozen=True)
@@ -43,6 +58,7 @@ STOCKS = [
         2.43,
         "2,12 18,16 34,10 50,15 66,7 82,9 98,3"
     ),
+
     Stock(
         "TSLA",
         "Tesla, Inc.",
@@ -50,6 +66,7 @@ STOCKS = [
         -1.28,
         "2,5 18,9 34,7 50,14 66,10 82,17 98,13"
     ),
+
     Stock(
         "NVDA",
         "NVIDIA Corp.",
@@ -57,6 +74,7 @@ STOCKS = [
         4.81,
         "2,16 18,13 34,15 50,8 66,11 82,4 98,7"
     ),
+
     Stock(
         "BTC",
         "Bitcoin",
@@ -68,23 +86,26 @@ STOCKS = [
 
 
 # --------------------------------------------------
-# Application state
+# Application State
 # --------------------------------------------------
 
 state: dict[str, Any] = {
     "balance": 24850.42,
+
     "progress": 68,
+
     "positions": {
         "AAPL": 12,
         "NVDA": 8
     },
 }
 
+
 state_lock = Lock()
 
 
 # --------------------------------------------------
-# Helper functions
+# Helper Functions
 # --------------------------------------------------
 
 def convert(value: float, currency: str) -> float:
@@ -98,7 +119,10 @@ def stock_payload(currency: str) -> list[dict[str, Any]]:
     return [
         {
             **asdict(stock),
-            "converted_price": convert(stock.price, currency)
+            "converted_price": convert(
+                stock.price,
+                currency
+            )
         }
         for stock in STOCKS
     ]
@@ -110,6 +134,7 @@ def stock_payload(currency: str) -> list[dict[str, Any]]:
 
 @app.get("/api/health")
 def health() -> Any:
+
     return jsonify({
         "status": "ok",
         "service": "ai-strategy-judge",
@@ -123,6 +148,7 @@ def health() -> Any:
 
 @app.get("/api/dashboard")
 def dashboard() -> Any:
+
     currency = request.args.get(
         "currency",
         "USD"
@@ -136,46 +162,64 @@ def dashboard() -> Any:
     stocks = [
         stock
         for stock in stock_payload(currency)
-        if not query
-        or query in f"{stock['symbol']} {stock['name']}".lower()
+        if (
+            not query
+            or query in f"{stock['symbol']} {stock['name']}".lower()
+        )
     ]
 
     with state_lock:
+
         snapshot = {
             "balance": convert(
                 state["balance"],
                 currency
             ),
+
             "progress": state["progress"],
+
             "positions": dict(
                 state["positions"]
             )
         }
 
     return jsonify({
-        "currency": currency if currency in RATES else "USD",
+
+        "currency": (
+            currency
+            if currency in RATES
+            else "USD"
+        ),
+
         "rates": RATES,
+
         "portfolio": snapshot,
+
         "stocks": stocks,
+
         "recommendations": [
+
             {
                 "type": "BUY",
                 "symbol": "NVDA",
                 "text": "Momentum remains strong",
                 "confidence": 94
             },
+
             {
                 "type": "HOLD",
                 "symbol": "AAPL",
                 "text": "Healthy consolidation zone",
                 "confidence": 82
             },
+
             {
                 "type": "SELL",
                 "symbol": "TSLA",
                 "text": "Volatility risk elevated",
                 "confidence": 76
             }
+
         ]
     })
 
@@ -183,26 +227,39 @@ def dashboard() -> Any:
 # --------------------------------------------------
 # DATABASE STOCK API
 # --------------------------------------------------
+# This endpoint reads stocks directly from PostgreSQL
+# / Supabase.
+# --------------------------------------------------
 
 @app.get("/api/stocks")
-def get_stocks():
+def get_stocks() -> Any:
+
     db = SessionLocal()
 
     try:
-        stocks = db.query(StockModel).all()
+
+        stocks = (
+            db.query(StockModel)
+            .all()
+        )
 
         return jsonify([
+
             {
                 "id": stock.id,
                 "symbol": stock.symbol,
-                "company_name": stock.company_name,
-                "exchange": stock.exchange,
-                "price": stock.price
+                "name": stock.name,
+                "price": stock.price,
+                "change": stock.change,
+                "points": stock.points
             }
+
             for stock in stocks
+
         ])
 
     finally:
+
         db.close()
 
 
@@ -212,6 +269,7 @@ def get_stocks():
 
 @app.post("/api/learning/progress")
 def update_progress() -> Any:
+
     payload = request.get_json(
         silent=True
     ) or {}
@@ -230,6 +288,7 @@ def update_progress() -> Any:
     )
 
     with state_lock:
+
         state["progress"] = min(
             100,
             state["progress"] + increment
@@ -246,6 +305,7 @@ def update_progress() -> Any:
 
 @app.post("/api/simulator/trade")
 def simulator_trade() -> Any:
+
     payload = request.get_json(
         silent=True
     ) or {}
@@ -269,32 +329,46 @@ def simulator_trade() -> Any:
         1
     )
 
+    # Validate symbol and side
+
     if (
         symbol not in {
             stock.symbol
             for stock in STOCKS
         }
+
         or side not in {
             "buy",
             "sell"
         }
     ):
+
         return jsonify({
             "error": "Use a valid symbol and buy or sell side."
         }), 400
 
+
+    # Validate quantity
+
     try:
+
         quantity = int(quantity)
 
     except (TypeError, ValueError):
+
         return jsonify({
             "error": "Quantity must be a positive integer."
         }), 400
 
+
     if quantity <= 0 or quantity > 1000:
+
         return jsonify({
             "error": "Quantity must be between 1 and 1000."
         }), 400
+
+
+    # Find stock
 
     stock = next(
         stock
@@ -302,7 +376,11 @@ def simulator_trade() -> Any:
         if stock.symbol == symbol
     )
 
+
     total = stock.price * quantity
+
+
+    # Update state
 
     with state_lock:
 
@@ -311,12 +389,17 @@ def simulator_trade() -> Any:
             0
         )
 
+
+        # BUY
+
         if side == "buy":
 
             if total > state["balance"]:
+
                 return jsonify({
                     "error": "Insufficient virtual balance."
                 }), 400
+
 
             state["balance"] -= total
 
@@ -324,11 +407,15 @@ def simulator_trade() -> Any:
                 current + quantity
             )
 
+
+        # SELL
+
         elif quantity > current:
 
             return jsonify({
                 "error": "Not enough shares to sell."
             }), 400
+
 
         else:
 
@@ -338,19 +425,27 @@ def simulator_trade() -> Any:
                 current - quantity
             )
 
+
         return jsonify({
+
             "ok": True,
+
             "symbol": symbol,
+
             "side": side,
+
             "quantity": quantity,
+
             "total": round(
                 total,
                 2
             ),
+
             "balance": round(
                 state["balance"],
                 2
             ),
+
             "positions": dict(
                 state["positions"]
             )
@@ -363,6 +458,7 @@ def simulator_trade() -> Any:
 
 @app.post("/api/mentor")
 def mentor() -> Any:
+
     payload = request.get_json(
         silent=True
     ) or {}
@@ -374,17 +470,22 @@ def mentor() -> Any:
         )
     ).strip()
 
+
     if not message:
+
         return jsonify({
             "error": "Message is required."
         }), 400
 
+
     return jsonify({
+
         "reply": (
             "Start with your risk limit, then let "
             "the strategy earn the right to scale. "
             "This is simulated guidance, not financial advice."
         )
+
     })
 
 
@@ -393,6 +494,7 @@ def mentor() -> Any:
 # --------------------------------------------------
 
 if __name__ == "__main__":
+
     app.run(
         host="0.0.0.0",
         port=5000,
